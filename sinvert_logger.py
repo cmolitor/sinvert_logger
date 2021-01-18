@@ -6,6 +6,8 @@ import struct
 import time
 import pickle
 import json
+import pytz
+from datetime import datetime
 
 minpythonversion = 0x3020000
 if sys.hexversion < minpythonversion:
@@ -407,56 +409,40 @@ def sendbytes2portal(server_addr,block):
     return daten
 
 def getokmsg():
-    global logstring
-    sendcontent = ('HTTP/1.1 200 OK'
-    +'Cache-Control: private, max-age=0'
-    +'Content-Type: text/xml; charset=utf-8\r\n'
-    +'Content-Length: 83\r\n'
-    +'\r\n'
-    +'<?xml version="1.0" encoding="utf-8"?>'
-    +'<string xmlns="InverterService">OK</string>\r\n')
-    logstring += 'Sende Daten zu WR:' + '\r\n' + sendcontent + '\r\n'
-    return sendcontent
+    tz = pytz.timezone('Europe/Berlin')
+    berlin_now = datetime.now(tz)
 
-#Hole aktuelle Zeit:
-def getNTPTime(host = "at.pool.ntp.org"):
-  global logstring
-  port = 123
-  buf = 1024
-  address = (host,port)
-  msg = '\x1b' + 47 * '\0'
+    sendcontent = ('<?xml version="1.0" encoding="utf-8"?>\r\n'
+      +'<string xmlns="InverterService">OK</string>')
 
-  # reference time (in seconds since 1900-01-01 00:00:00)
-  TIME1970 = 2208988800 # 1970-01-01 00:00:00
-
-  # connect to server
-  client_socket = socket.socket( socket.AF_INET, socket.SOCK_DGRAM)
-  client_socket.sendto(string2bytes(msg), address)
-  msg, address = client_socket.recvfrom( buf )
-  t = struct.unpack( "!12I", msg )[10]
-  t -= TIME1970
-  client_socket.close()
-  del client_socket
-  return time.strftime('%d.%m.%Y %H:%M:%S', time.localtime(t))
-
-def gettimemsg():
-  global logstring
-  try:
-    sendcontent = ('<?xml version="1.0" encoding="utf-8"?>'
-                   +'<string xmlns="InverterService">&lt;crqr&gt;&lt;c n="SETINVERTERTIME" i="0"&gt;&lt;p n="date" t="3"&gt;'
-                   +getNTPTime()
-                   +'&lt;/p&gt;&lt;/c&gt;&lt;/crqr&gt;</string>')
-    logstring += 'Sende Daten zu WR:' + '\r\n' + sendcontent + '\r\n'
-    return ('HTTP/1.1 200 OK'
-    +'Cache-Control: private, max-age=0'
+    return ('HTTP/1.1 200 OK\r\n'
+    +'Date: ' + berlin_now.strftime('%a, %d %b %Y %X GMT') +'\r\n'
     +'Content-Type: text/xml; charset=utf-8\r\n'
     +'Content-Length: ' + str(len(sendcontent)) + '\r\n'
+    +'Connection: keep-alive\r\n'
+    +'X-Frame-Options: SAMEORIGIN\r\n'
+    +'\r\n'
+    +sendcontent)
+
+def gettimemsg():
+  tz = pytz.timezone('Europe/Berlin')
+  berlin_now = datetime.now(tz)
+  try:
+    sendcontent = ('<?xml version="1.0" encoding="utf-8"?>\r\n'
+                   +'<string xmlns="InverterService">&lt;crqr&gt;&lt;c n="SETINVERTERTIME" i="0"&gt;&lt;p n="date" t="3"&gt;'
+                   +berlin_now.strftime('%d.%m.%Y %X')
+                   +'&lt;/p&gt;&lt;/c&gt;&lt;/crqr&gt;</string>')
+    return ('HTTP/1.1 200 OK\r\n'
+    +'Date: ' + berlin_now.strftime('%a, %d %b %Y %X GMT') +'\r\n'
+    +'Content-Type: text/xml; charset=utf-8\r\n'
+    +'Content-Length: ' + str(len(sendcontent)) + '\r\n'
+    +'Connection: keep-alive\r\n'
+    +'X-Frame-Options: SAMEORIGIN\r\n'
     +'\r\n'
     + sendcontent)
   except BaseException as e:
-    print('Can`t get NTP-Time' + str(e) + '\r\n')
-    logstring += str(e) + '\r\n' + 'Can`t get NTP-Time!' + '\r\n'
-    return getokmsg()#Wenn Zeit holen nicht möglich, nur Ok message schicken
+    print('Irgendwas bei der Erstellung der Antwortnachricht zum Setzen der Uhrzeit ist schief gelaufen. gettimemsg()')
+    return getokmsg() # Wenn Zeit holen nicht möglich, nur Ok message schicken
 
 #Hier startet Main prg
 def main():
@@ -507,7 +493,7 @@ def main():
       # Content-Type: application/x-www-form-urlencoded
       # Content-Length: 187
 
-      # second execution of recv() brings the following part of the message (header)
+      # second execution of recv() brings the following part of the message (body)
       # xmlData=<re><m>502DF400489C</m><s>LBAN02261010322</s><e><ts>1604741706</ts><code>a010c</code><state>2</state><short>0</short><long>2048</long><type>8</type><actstate>6</actstate></e></re>
       # then we should stop reading. We could also use Content-length. That would probably be cleaner.
 
@@ -522,12 +508,39 @@ def main():
     if (rcvok1 >= 0 and rcvok2 >= 0):
       print("Daten von WR empfangen: \r\n" + rcvdatenstring + '\r\n')
       logstring += "Daten von WR empfangen: " + rcvdatenstring + '\r\n'
+
+      # Daten an GreenSynergy Portal senden
       print("Daten an GreenSynergy Portal senden. \r\n")
       logstring += "Daten an GreenSynergy Portal senden. \r\n"
       for adress in rawdataserver:
         reply = sendbytes2portal(adress, block)
       print("Daten von GreenSynergy Portal enthalten: \r\n" + bytes2string(reply) + "\r\n")
       logstring += "Daten von GreenSynergy Portal enthalten: \r\n" + bytes2string(reply) + "\r\n"
+
+      # Empfangene Daten verarbeiten
+      if rcvdatenstring.find('<rd') >= 0: # Daten empfangen
+        print('Empfangene Nachricht enthält Betriebsdaten des Wechselrichters <rd>\r\n')
+        print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
+        # client_serving_socket.send(string2bytes(getokmsg()))
+      elif rcvdatenstring.find('<re') >= 0: # Fehlermeldung empfangen
+        print('Empfangene Nachricht enthält Fehlermeldung des Wechselrichters <re>\r\n')
+        print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
+        # client_serving_socket.send(string2bytes(getokmsg()))
+      elif rcvdatenstring.find('<crq') >= 0: # Steuerungsdaten empfangen # Wenn Steuerdaten empfangen, dann in Uhrzeit setzen
+        # Dem WR aktuelle Uhrzeit schicken schicken
+        print('Empfangene Nachricht enthält Steuerungsanfrage des Wechselrichters <crq>\r\n')
+        print('Daten, die wir an WR senden würden: \r\n' + gettimemsg() + "\r\n")
+        # client_serving_socket.send(string2bytes(gettimemsg()))
+
+      else: #Bei falschem Format nur Ausgeben
+        print('Falsches Datenformat empfangen!\r\n')
+        print(rcvdatenstring)
+        logstring += 'Falsches Datenformat empfangen!\r\n' + rcvdatenstring[rcvdatenstring.find('xmlData'):] + '\r\n'
+        # Dem WR eine OK Nachricht schicken
+        # client_serving_socket.send(string2bytes(getokmsg()))
+        print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
+
+      # Daten an Wechselrichter senden
       print("Daten vom GreenSynergy Portal an Wechselrichter senden.")
       logstring += "Daten vom GreenSynergy Portal an Wechselrichter senden."
       client_serving_socket.send(reply)
