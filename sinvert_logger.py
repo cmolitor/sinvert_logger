@@ -521,29 +521,29 @@ def main():
       if rcvdatenstring.find('<rd') >= 0: # Daten empfangen
         print('Empfangene Nachricht enthält Betriebsdaten des Wechselrichters <rd>\r\n')
         print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
-        # client_serving_socket.send(string2bytes(getokmsg()))
+        client_serving_socket.send(string2bytes(getokmsg()))
       elif rcvdatenstring.find('<re') >= 0: # Fehlermeldung empfangen
         print('Empfangene Nachricht enthält Fehlermeldung des Wechselrichters <re>\r\n')
         print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
-        # client_serving_socket.send(string2bytes(getokmsg()))
+        client_serving_socket.send(string2bytes(getokmsg()))
       elif rcvdatenstring.find('<crq') >= 0: # Steuerungsdaten empfangen # Wenn Steuerdaten empfangen, dann in Uhrzeit setzen
         # Dem WR aktuelle Uhrzeit schicken schicken
         print('Empfangene Nachricht enthält Steuerungsanfrage des Wechselrichters <crq>\r\n')
         print('Daten, die wir an WR senden würden: \r\n' + gettimemsg() + "\r\n")
-        # client_serving_socket.send(string2bytes(gettimemsg()))
+        client_serving_socket.send(string2bytes(gettimemsg()))
 
       else: #Bei falschem Format nur Ausgeben
         print('Falsches Datenformat empfangen!\r\n')
         print(rcvdatenstring)
         logstring += 'Falsches Datenformat empfangen!\r\n' + rcvdatenstring[rcvdatenstring.find('xmlData'):] + '\r\n'
         # Dem WR eine OK Nachricht schicken
-        # client_serving_socket.send(string2bytes(getokmsg()))
+        client_serving_socket.send(string2bytes(getokmsg()))
         print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
 
       # Daten an Wechselrichter senden
-      print("Daten vom GreenSynergy Portal an Wechselrichter senden.")
-      logstring += "Daten vom GreenSynergy Portal an Wechselrichter senden."
-      client_serving_socket.send(reply)
+      #print("Daten vom GreenSynergy Portal an Wechselrichter senden.")
+      #logstring += "Daten vom GreenSynergy Portal an Wechselrichter senden."
+      #client_serving_socket.send(reply)
     else: # 
       print("Andere Daten empfangen: " + rcvdatenstring + '\r\n')
       logstring += "Andere Daten empfangen: " + rcvdatenstring + '\r\n'
