@@ -7,7 +7,9 @@ import time
 import pickle
 import json
 import pytz
+import paho.mqtt.client as mqtt
 from datetime import datetime
+from collections import OrderedDict
 
 minpythonversion = 0x3020000
 if sys.hexversion < minpythonversion:
@@ -83,21 +85,106 @@ loggingfile = loggingpath + time.strftime("%Y_%m_") + loggingfilename
 #je nach Firmware mit "#" auskommentieren bzw. einkommentieren
 
 #macaddr,endmacaddr = 'm="','"'#für neuere firmwares
-macaddr,endmacaddr = '<m>','</m>'#für ältere firmwares
+tag_macaddr,tag_end_macaddr = '<m>','</m>'#für ältere firmwares
 
 #firmware,endfirmware = 's="','"'#für neuere firmwares
-firmware,endfirmware = '<s>','</s>'#für ältere firmwares
+tag_serialno,tag_end_serialno = '<s>','</s>'#für ältere firmwares
 
 server_ip = '' #IP- des Raspi angeben, wenn keine IP angeben wird ==> Raspi lauscht auf allen zugewiesenen IP Adressen
 server_port = 81 #Port auf dem das prg am raspi lauscht
 
-#Server, an dessen die Daten 1:1 durchgereicht werden, Format: [('ipserver1',portserver1),('ipserver2',portserver2),usw...]
-#Es k?nnen beliebig viele Server angegeben werden, diese werden in einer Schleife abgearbeitet
-#Wenn an keine Server weitergereicht werden soll, dann: rawdataserver = []
+# Server, an dessen die Daten 1:1 durchgereicht werden, Format: [('ipserver1',portserver1),('ipserver2',portserver2),usw...]
+# Es k?nnen beliebig viele Server angegeben werden, diese werden in einer Schleife abgearbeitet
+# Wenn an keine Server weitergereicht werden soll, dann: rawdataserver = []
+# Hier: 5.45.98.160 -> greensynergy server
 rawdataserver = [('5.45.98.160', 80)]
 
 #init logstring
 logstring = ''
+
+class Inverter:
+  def __init__(self, serialno):  
+    self.serialno = serialno
+    self.logfile_data = ""
+    self.logfile_data_name = "" # LBAN02261010321_data_YEAR_Month e.g. LBAN02261010321_data_2021_03
+    self.logfile_error = ""
+    self.logfile_error_name = "" # LBAN02261010321_error_YEAR_Month e.g. LBAN02261010321_error_2021_03
+    self.setLogfiles()
+
+  def logDataMSG(self, msg):
+    print("Trying to log data... ")
+
+    actualFilename = self.composeActualFilename("data")
+    # print("actualFilename: ", actualFilename)
+
+    if actualFilename == self.logfile_data_name:
+      # print("Actual filename ok...")
+      self.logfile_data.write(msg + "\n")
+    else:
+      # print("create new file...")
+      try:
+        # print("close existing file...")
+        self.logfile_data.close()
+      except FileNotFoundError:
+        print("Data logfile not accessible")
+      setLogfiles()
+      self.logfile_data.write(msg + "\n")
+      
+    self.logfile_data.flush()
+
+    print("Logged in data logfile.")
+
+  def logErrorMSG(self, msg):
+    print("Trying to log error... ")
+
+    actualFilename = self.composeActualFilename("error")
+    if actualFilename == self.logfile_error_name:
+      self.logfile_error.write(msg + "\n")
+    else:
+      try:
+        self.logfile_error.close()
+      except FileNotFoundError:
+        print("Error logfile not accessible")
+      setLogfiles()
+      self.logfile_error.write(msg + "\n")
+
+    self.logfile_error.flush()
+
+    print("Logged in error logfile.")
+
+  # Compose the filename as it should be for the inverter and the current month and year
+  def composeActualFilename(self, type):
+    date = datetime.today()
+    year = date.year
+    month = date.month
+
+    if type == "data":
+      return self.serialno + "_data_" + str(year) + "_" + str(month) + ".txt"
+    elif type == "error":
+      return self.serialno + "_error_" + str(year) + "_" + str(month) + ".txt"
+    else:
+      return "Something went wrong"
+
+  def setLogfiles(self):
+    actualFilename = self.composeActualFilename("data")
+    try:
+      f = open(actualFilename, "a+") # if file exists, append data, if not create a new one
+      self.logfile_data = f
+      self.logfile_data_name = actualFilename
+    except FileNotFoundError:
+      print("Data logfile not accessible")
+
+    actualFilename = self.composeActualFilename("error")
+    try:
+      f = open(actualFilename, "a+") # if file exists, append data, if not create a new one
+      self.logfile_error = f
+      self.logfile_error_name = actualFilename
+    except FileNotFoundError:
+      print("Error logfile not accessible")
+
+
+lsInverters = []
+
 
 def byteorder():
   global logstring
@@ -187,198 +274,256 @@ def initerrlogfile(errlogfile):
   f.write(returnval)
   f.close()
 
+# def writeDataFile(data):
+#   serialno = data['serialno']
+
+#   for i, inverter in enumerate(lsLogFiles):
+#     if serialno in inverter:
+#       # check if file exits -> write to file
+#     else
+
+#   print("write data file")
+
+# def writeErrorFile(path):
+#   print("write error file")
+
 def decodedata(rcv):#Daten decodieren
   global logstring
-  string = []
+  dataset = {}
+  operationaldata = {}
 
-  index = macaddr
-  endindex = endmacaddr
+  index = tag_macaddr
+  endindex = tag_end_macaddr
   if rcv.find(index) >= 0:
-    string.append(str(rcv[rcv.find(index)+3:rcv.find(endindex,rcv.find(index)+3)]))
+    dataset['mac_address'] = str(rcv[rcv.find(index)+3:rcv.find(endindex,rcv.find(index)+3)])
   else:
-    string.append('0')
-  index = firmware
-  endindex = endfirmware
+    dataset['mac_address'] = '0'
+
+  index = tag_serialno
+  endindex = tag_end_serialno
   if rcv.find(index) >= 0:
-    string.append(str(rcv[rcv.find(index)+3:rcv.find(endindex,rcv.find(index)+3)]))
+    dataset['serialno'] = str(rcv[rcv.find(index)+3:rcv.find(endindex,rcv.find(index)+3)])
   else:
-    string.append('0')
+    dataset['serialno'] = '0'
+
   index = 't="'
   if rcv.find(index) >= 0:
     timestamp = int((rcv[rcv.find(index)+3:rcv.find('"',rcv.find(index)+3)]))
-    string.append(time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(timestamp)))
+    dataset['timestamp'] = timestamp
+    dataset['datetime'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(timestamp))
   else:
-    string.append('0')
+    dataset['timestamp'] = '0'
+    dataset['datetime'] = '0'
+
   index = '" l="'
   if rcv.find(index) >= 0:
-    string.append(str((rcv[rcv.find(index)+5:rcv.find('"',rcv.find(index)+5)])))
+    dataset['loggerinterval'] = str((rcv[rcv.find(index)+5:rcv.find('"',rcv.find(index)+5)]))
   else:
-    string.append('0')
+    dataset['loggerinterval'] = 0
+
   index = 'i="1"'
   if rcv.find(index) >= 0:
     acleistung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    string.append(acleistung)
+    operationaldata['AC_power'] = acleistung
   else:
-    string.append('0')
+    operationaldata['AC_power'] = 0
+
   index = 'i="2"'
   if rcv.find(index) >= 0:
     acspannung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    string.append(acspannung)
+    operationaldata['AC_voltage'] = acspannung
   else:
-    string.append('0')
+    operationaldata['AC_voltage'] = 0
+
   index = 'i="3"'
   if rcv.find(index) >= 0:
     acstrom = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    string.append(acstrom)
+    operationaldata['AC_current'] = acstrom
   else:
-    string.append('0')
+    operationaldata['AC_current'] = 0
+
   index = 'i="4"'
   if rcv.find(index) >= 0:
     acfrequenz = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    string.append(acfrequenz)
+    operationaldata['frequency'] = acfrequenz
   else:
-    string.append('0')
+    operationaldata['frequency'] = 0
+
   index = 'i="5"'
   if rcv.find(index) >= 0:
     dcleistung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    string.append(dcleistung)
+    operationaldata['DC_power'] = dcleistung
   else:
-    string.append('0')
+    operationaldata['DC_power'] = 0
+
   index = 'i="6"'
   if rcv.find(index) >= 0:
     dcspannung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    string.append(dcspannung)
+    operationaldata['DC_voltage'] = dcspannung
   else:
-    string.append('0')
+    operationaldata['DC_voltage'] = 0
+
   index = 'i="7"'
   if rcv.find(index) >= 0:
     dcstrom = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    string.append(dcstrom)
+    operationaldata['DC_current'] = dcstrom
   else:
-    string.append('0')
+    operationaldata['DC_current'] = 0
+
   index = 'i="8"'
   if rcv.find(index) >= 0:
     temp1 = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    string.append(temp1)
+    operationaldata['temperature_left'] = temp1
   else:
-    string.append('0')
+    operationaldata['temperature_left'] = 0
+
   index = 'i="9"'
   if rcv.find(index) >= 0:
     temp2 = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    string.append(temp2)
+    operationaldata['temperature_right'] = temp2
   else:
-    string.append('0')
+    operationaldata['temperature_right'] = 0
+
   index = 'i="A"'
   if rcv.find(index) >= 0:
     einstrahlung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])) + ''
-    string.append(einstrahlung)
+    operationaldata['irridation'] = einstrahlung
   else:
-    string.append('0')
+    operationaldata['irridation'] = 0
+
   index = 'i="B"'
   if rcv.find(index) >= 0:
     modultemp = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])) + ''
-    string.append(modultemp)
+    operationaldata['temperature_pvpanel'] = modultemp
   else:
-    string.append('0')
+    operationaldata['temperature_pvpanel'] = 0
+
   index = 'i="C"'
   if rcv.find(index) >= 0:
     tagesertrag = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    string.append(tagesertrag)
+    operationaldata['daily_yield'] = tagesertrag
   else:
-    string.append('0')
+    operationaldata['daily_yield'] = 0
+
   index = 'i="D"'
   if rcv.find(index) >= 0:
     status = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    string.append(status)
+    operationaldata['status'] = status
   else:
-    string.append('0')
+    operationaldata['status'] = 0
+
   index = 'i="E"'
   if rcv.find(index) >= 0:
     gesamtertrag = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    string.append(gesamtertrag)
+    operationaldata['yield'] = gesamtertrag
   else:
-    string.append('0')
+    operationaldata['yield'] = 0
+
   index = 'i="F"'
   if rcv.find(index) >= 0:
     betriebsstunden = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    string.append(betriebsstunden)
+    operationaldata['operating_hours'] = betriebsstunden
   else:
-    string.append('0')
+    operationaldata['operating_hours'] = 0
+
   index = 'i="10"'
   if rcv.find(index) >= 0:
-    string.append(str(converthex2int(rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index))])/10))
+    operationaldata['undefined1'] = str(converthex2int(rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index))])/10)
   else:
-    string.append('0')
+    operationaldata['undefined1'] = 0
+
   index = 'i="12"'
   if rcv.find(index) >= 0:
     leistungsbesch = str(converthex2int(rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index))])/10)
-    string.append(leistungsbesch)
+    operationaldata['undefined2'] = leistungsbesch
   else:
-    string.append('0')
+    operationaldata['undefined2'] = 0
+
   index = 'i="11"'
   if rcv.find(index) >= 0:
     tagessonnenenergie = str(converthex2int(rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index))])/10)
-    string.append(tagessonnenenergie)
+    operationaldata['undefined3'] = tagessonnenenergie
   else:
-    string.append('0')
-  returnval = (str(string).replace("', '",';').replace("['",'').replace("']",'\r\n').replace(".",','))
-  logstring += 'Decoded data:' + '\r\n' + returnval + '\r\n'
-  print(returnval)
-  return returnval
+    operationaldata['undefined3'] = 0
+
+  # returnval = (str(string).replace("', '",';').replace("['",'').replace("']",'\r\n').replace(".",','))
+  # logstring += 'Decoded data:' + '\r\n' + returnval + '\r\n'
+  # print(returnval)
+  dataset['operationaldata'] = operationaldata
+  print("JSON: " + json.dumps(dataset, sort_keys=True)) # sort_keys=True
+  return dataset
 
 def decodeerr(rcv):#Störungen decodieren
+
+  #xmlData=<re><m>502DF40048AF</m><s>LBAN02261010321</s><e><ts>1612105645</ts><code>a010c</code><state>2</state><short>0</short><long>2048</long><type>8</type><actstate>6</actstate></e></re>
+
   global logstring
   string = []
+  errormsg = {}
 
-  index = macaddr
+  index = tag_macaddr
+  endindex = tag_end_macaddr
   if rcv.find(index) >= 0:
-    string.append(str(rcv[rcv.find(index)+3:rcv.find('"',rcv.find(index)+3)]))
+    errormsg['mac_address'] = str(rcv[rcv.find(index)+3:rcv.find(endindex,rcv.find(index)+3)])
   else:
-    string.append('0')
-  index = firmware
+    errormsg['mac_address'] = "0"
+
+  index = tag_serialno
+  endindex = tag_end_serialno
   if rcv.find(index) >= 0:
-    string.append(str(rcv[rcv.find(index)+3:rcv.find('"',rcv.find(index)+3)]))
+    errormsg['serialno'] = str(rcv[rcv.find(index)+3:rcv.find(endindex,rcv.find(index)+3)])
   else:
-    string.append('0')
-  index = 't="'
+    errormsg['serialno'] = "0"
+
+  index = '<ts>'
   if rcv.find(index) >= 0:
-    string.append(time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int((rcv[rcv.find(index)+3:rcv.find('"',rcv.find(index)+3)])))))
+    timestamp = int((rcv[rcv.find(index)+4:rcv.find('<',rcv.find(index)+4)]))
+    errormsg['timestamp'] = timestamp
+    errormsg['datetime'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(timestamp))
   else:
-    string.append('0')
+    errormsg['timestamp'] = "0"
+    errormsg['datetime'] = "0"
+
   index = '<code>'
   if rcv.find(index) >= 0:
-    string.append(str((rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index)+6)])))
+    errormsg['code'] = str((rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index)+6)]))
   else:
-    string.append('0')
+    errormsg['code'] = "0"
+
   index = '<state>'
   if rcv.find(index) >= 0:
-    string.append(str((rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index)+7)])))
+    errormsg['state'] = str((rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index)+7)]))
   else:
-    string.append('0')
+    errormsg['state'] = "0"
+
   index = '<short>'
   if rcv.find(index) >= 0:
-    string.append(str((rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index)+7)])))
+    errormsg['short'] = str((rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index)+7)]))
   else:
-    string.append('0')
+    errormsg['short'] = "0"
+
   index = '<long>'
   if rcv.find(index) >= 0:
-    string.append(str((rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index)+6)])))
+    errormsg['long'] = str((rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index)+6)]))
   else:
-    string.append('0')
+    errormsg['long'] = "0"
+
   index = '<type>'
   if rcv.find(index) >= 0:
-    string.append(str((rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index)+6)])))
+    errormsg['type'] = str((rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index)+6)]))
   else:
-    string.append('0')
+    errormsg['type'] = "0"
+
   index = '<actstate>'
   if rcv.find(index) >= 0:
-    string.append(str((rcv[rcv.find(index)+10:rcv.find('<',rcv.find(index)+10)])))
+    errormsg['actstate'] = str((rcv[rcv.find(index)+10:rcv.find('<',rcv.find(index)+10)]))
   else:
-    string.append('0')
-  returnval = (str(string).replace("', '",';').replace("['",'').replace("']",'\r\n').replace(".",','))
-  print(returnval)
-  logstring += 'Decoded errors:' + '\r\n' + returnval + '\r\n'
-  return returnval
+    errormsg['actstate'] = "0"
+  # returnval = (str(string).replace("', '",';').replace("['",'').replace("']",'\r\n').replace(".",','))
+  # print(returnval)
+  # logstring += 'Decoded errors:' + '\r\n' + returnval + '\r\n'
+  print("JSON Error: " + json.dumps(errormsg, sort_keys=True)) # sort_keys=True
+  return errormsg
 
 def sendbytes2portal(server_addr,block):
     global logstring
@@ -444,6 +589,14 @@ def gettimemsg():
     print('Irgendwas bei der Erstellung der Antwortnachricht zum Setzen der Uhrzeit ist schief gelaufen. gettimemsg()')
     return getokmsg() # Wenn Zeit holen nicht möglich, nur Ok message schicken
 
+def on_connect(client, userdata, flags, rc):
+  print("MQTT client connected: " + str(client.is_connected()))
+  print("Connected with result code "+str(rc))
+
+  # Subscribing in on_connect() means that if we lose the connection and
+  # reconnect then subscriptions will be renewed.
+  # client.subscribe("$SYS/#")
+
 #Hier startet Main prg
 def main():
   global logstring
@@ -459,8 +612,26 @@ def main():
   loggingfile = loggingpath + time.strftime("%Y_%m_") + loggingfilename
   logstring = ""
 
+  # Init MQTT client
+  mqttclient = mqtt.Client()
+  mqttclient.on_connect = on_connect
+  mqttclient.username_pw_set("logsinvert", "Spiel-Konzernumsatz-Zielen-Kurz")
+
+  mqttclient.connect("51.15.196.38", 1883)
+  mqttclient.loop_start()
+
+
   #print(socket.gethostbyname(socket.gethostname()))
   while True:
+    ret = mqttclient.publish("seimerich/pv/neuerstall/status", "Warte auf Daten...");
+    print("Return of mqtt publish: " + str(ret) + "\r\n")
+
+    for _inverter in lsInverters:
+      try:
+        _inverter.logfile_error.flush()
+      except FileNotFoundError:
+        print("Flush went wrong. Logfile not accessible.")
+
     print('Listen for Data')
     logstring += "Listen for Data"
     rcvdatenstring = ''
@@ -470,6 +641,9 @@ def main():
     rcvbytes = string2bytes('')
     client_serving_socket, addr = server_socket.accept()
     client_serving_socket.settimeout(1)
+
+    for ls in lsInverters:
+      print(ls.serialno)
   
     while True:
       try:
@@ -520,33 +694,62 @@ def main():
       # Empfangene Daten verarbeiten
       if rcvdatenstring.find('<rd') >= 0: # Daten empfangen
         print('Empfangene Nachricht enthält Betriebsdaten des Wechselrichters <rd>\r\n')
-        print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
+        # print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
         client_serving_socket.send(string2bytes(getokmsg()))
+        jsondata = decodedata(rcvdatenstring)
+        ret = mqttclient.publish("seimerich/pv/neuerstall/" + str(jsondata['serialno']) + "/data", json.dumps(jsondata, sort_keys=True));
+        print("Return of mqtt publish: " + str(ret) + "\r\n")
+
+        el = [x for x in lsInverters if x.serialno == jsondata['serialno']] 
+        if len(el) > 0:
+          print("Inverter already in list")
+          inverter = el[0]
+        else:
+          print("Adding new inverter to list")
+          inverter = Inverter(jsondata['serialno'])
+          lsInverters.append(inverter)
+
+        inverter.logDataMSG(json.dumps(jsondata, sort_keys=True))
+
       elif rcvdatenstring.find('<re') >= 0: # Fehlermeldung empfangen
         print('Empfangene Nachricht enthält Fehlermeldung des Wechselrichters <re>\r\n')
-        print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
+        # print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
         client_serving_socket.send(string2bytes(getokmsg()))
+        jsondata = decodeerr(rcvdatenstring)
+        ret = mqttclient.publish("seimerich/pv/neuerstall/" + str(jsondata['serialno']) + "/error", json.dumps(jsondata, sort_keys=True));
+        print("Return of mqtt publish: " + str(ret) + "\r\n")
+
+        el = [x for x in lsInverters if x.serialno == jsondata['serialno']] 
+        if len(el) > 0:
+          print("Inverter already in list")
+          inverter = el[0]
+        else:
+          print("Adding new inverter to list")
+          inverter = Inverter(jsondata['serialno'])
+          lsInverters.append(inverter)
+
+        inverter.logErrorMSG(json.dumps(jsondata, sort_keys=True))
+
       elif rcvdatenstring.find('<crq') >= 0: # Steuerungsdaten empfangen # Wenn Steuerdaten empfangen, dann in Uhrzeit setzen
         # Dem WR aktuelle Uhrzeit schicken schicken
         print('Empfangene Nachricht enthält Steuerungsanfrage des Wechselrichters <crq>\r\n')
-        print('Daten, die wir an WR senden würden: \r\n' + gettimemsg() + "\r\n")
+        # print('Daten, die wir an WR senden würden: \r\n' + gettimemsg() + "\r\n")
         client_serving_socket.send(string2bytes(gettimemsg()))
 
-      else: #Bei falschem Format nur Ausgeben
+      else: # Serveranfragen, die vom Wechselrichter kommen, aber nicht interpretiert werden kann
         print('Falsches Datenformat empfangen!\r\n')
         print(rcvdatenstring)
-        logstring += 'Falsches Datenformat empfangen!\r\n' + rcvdatenstring[rcvdatenstring.find('xmlData'):] + '\r\n'
+        # logstring += 'Falsches Datenformat empfangen!\r\n' + rcvdatenstring[rcvdatenstring.find('xmlData'):] + '\r\n'
         # Dem WR eine OK Nachricht schicken
         client_serving_socket.send(string2bytes(getokmsg()))
-        print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
+        ret = mqttclient.publish("seimerich/pv/neuerstall/Unbekannte_Wechselrichterdaten", str(rcvdatenstring));
+        print("Return of mqtt publish: " + str(ret) + "\r\n")
 
-      # Daten an Wechselrichter senden
-      #print("Daten vom GreenSynergy Portal an Wechselrichter senden.")
-      #logstring += "Daten vom GreenSynergy Portal an Wechselrichter senden."
-      #client_serving_socket.send(reply)
-    else: # 
+    else: # Serveranfragen, die nicht von den Wechselrichtern stammen
       print("Andere Daten empfangen: " + rcvdatenstring + '\r\n')
       logstring += "Andere Daten empfangen: " + rcvdatenstring + '\r\n'
+      ret = mqttclient.publish("seimerich/pv/neuerstall/Unbekannte_Daten", str(rcvdatenstring));
+      print("Return of mqtt publish: " + str(ret) + "\r\n")
 
     # Verbindung schließen
     client_serving_socket.close()
@@ -557,83 +760,6 @@ def main():
     f.write(logstring)
     f.close()
     logstring = ''
-
-    # #Werte dekodieren und in csv schreiben
-    # #Logfilepfad initialisieren
-    # datalogfile = datalogpath + time.strftime("%Y_%m_") + datalogfilename
-    # errlogfile = errlogpath + time.strftime("%Y_%m_") + errlogfilename
-    # loggingfile = loggingpath + time.strftime("%Y_%m_") + loggingfilename
-    # #Prüfe ob Störungen oder Daten empfangen wurden
-    # if rcvdatenstring.find('<rd') >= 0:#Wenn Daten empfangen, dann in datalogfile schreiben
-
-    #   try:#Prüfe ob Datei existiert
-    #     f = open(datalogfile, 'r')
-    #     #lastline = f.readlines()[-1]
-    #     #print(lastline)
-    #     f.close()
-    #   except BaseException as e:#Wenn nicht dann neue Datei erstellen und Spaltenbeschriftung hinzufügen
-    #     print(str(e) + '\r\n')
-    #     logstring += str(e) + '\r\n' + 'Datalogfile existiert nicht ==> neues erstellen!' + '\r\n'
-    #     initdatalogfile(datalogfile)
-    #   csvdata = decodedata(rcvdatenstring)
-    #   #Daten in File schreiben
-    #   f = open(datalogfile, 'a')
-    #   f.write(csvdata)
-    #   f.close()
-    #   #Dem WR eine OK Nachricht schicken
-    #   client_serving_socket.send(string2bytes(getokmsg()))
-      
-    # elif rcvdatenstring.find('<re') >= 0:#Wenn Errordaten empfangen, dann in errlogfile schreiben
-
-    #   try:#Prüfe ob Datei existiert
-    #     f = open(errlogfile, 'r')
-    #     #lastline = f.readlines()[-1]
-    #     #print(lastline)
-    #     f.close()
-    #   except BaseException as e:#Wenn nicht dann neue Datei erstellen und Spaltenbeschriftung hinzufügen
-    #     print(str(e) + '\r\n')
-    #     logstring += str(e) + '\r\n' + 'Errorlogfile existiert nicht ==> neues erstellen!' + '\r\n'
-    #     initerrlogfile(errlogfile)
-    #   #Daten in File schreiben
-    #   f = open(errlogfile, 'a')
-    #   f.write(decodeerr(rcvdatenstring))
-    #   f.close()
-    #   #Dem WR eine OK Nachricht schicken
-    #   client_serving_socket.send(string2bytes(getokmsg()))
-      
-    # elif rcvdatenstring.find('<crq>') >= 0:#Wenn Steuerdaten empfangen, dann in Uhrzeit setzen
-    #   #Dem WR aktuelle Uhrzeit schicken schicken
-    #   client_serving_socket.send(string2bytes(gettimemsg()))
-
-
-    # else:#Bei falschem Format nur Ausgeben
-    #   print('Falsches Datenformat empfangen!\r\n')
-    #   print(rcvdatenstring)
-    #   logstring += 'Falsches Datenformat empfangen!\r\n' + rcvdatenstring[rcvdatenstring.find('xmlData'):] + '\r\n'
-    #   #Dem WR eine OK Nachricht schicken
-    #   client_serving_socket.send(string2bytes(getokmsg()))
-
-    # daten = 0
-
-    # #Sende zu Datenbankserver, wenn nicht gewünscht, nächste Zeile mit "#" auskommentieren
-    # for adress in rawdataserver:
-    #   print('Sende Daten zu greensynergy (bytes)')
-    #   logstring += 'Sende Daten zu greensynergy (bytes)' + '\r\n'
-    #   daten = sendbytes2portal(adress, block)
-
-    # print('Sende Antwort von greensynergy zum WR')
-    # logstring += 'Sende Antwort von greensynergy zum WR' + '\r\n'
-    # client_serving_socket.send(daten)
-    
-    # #Verbindung schließen
-    # client_serving_socket.close()
-    # del client_serving_socket
-    # #Daten in Loggingfile schreiben
-    # f = open(loggingfile, 'a')
-    # f.write(logstring)
-    # f.close()
-    # logstring = ''
-
 
 #Hauptschleife
 while True:
