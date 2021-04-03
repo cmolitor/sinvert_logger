@@ -8,8 +8,11 @@ import pickle
 import json
 import pytz
 import paho.mqtt.client as mqtt
+import logging
 from datetime import datetime
 from collections import OrderedDict
+
+logging.basicConfig(filename='logfile.log', encoding='utf-8', level=logging.DEBUG)
 
 minpythonversion = 0x3020000
 if sys.hexversion < minpythonversion:
@@ -56,18 +59,6 @@ if sys.hexversion < minpythonversion:
 # sudo crontab -e
 # @reboot sudo python3 /home/pi/RcvSendSinvertDaten_V4.py
 
-# Benutzung auf eigene Gefahr! Keine Garantie/Gewaehrleistung/Schadenersatzansprueche.
-
-# TODO:
-# - Exceptionhandling optimieren
-# - Codeoptimierungen...
-# - Mailversand wenn Stoerungen auftreten
-# - Stoerungsnummern wandeln in Stoerungstext
-
-
-#Define Pfad für CSV-Files, sind den eigenen Bedürfnissen anzupassen 
-#datalogfile = "E:\" + time.strftime("\%Y_%m_DataSinvert") + '.csv' #Beispiel für Windows
-#errlogfile = "E:\" + time.strftime("\%Y_%m_ErrSinvert") + '.csv'#Beispiel für Windows
 
 datalogpath = "./" # /home/pi/
 errlogpath = "./" # /home/pi/
@@ -102,6 +93,8 @@ rawdataserver = [('5.45.98.160', 80)]
 #init logstring
 logstring = ''
 
+lsInverters = []
+
 class Inverter:
   def __init__(self, serialno):  
     self.serialno = serialno
@@ -109,7 +102,8 @@ class Inverter:
     self.logfile_data_name = "" # LBAN02261010321_data_YEAR_Month e.g. LBAN02261010321_data_2021_03
     self.logfile_error = ""
     self.logfile_error_name = "" # LBAN02261010321_error_YEAR_Month e.g. LBAN02261010321_error_2021_03
-    self.setLogfiles()
+    self.setLogfiles("data")
+    self.setLogfiles("error")
 
   def logDataMSG(self, msg):
     print("Trying to log data... ")
@@ -121,13 +115,8 @@ class Inverter:
       # print("Actual filename ok...")
       self.logfile_data.write(msg + "\n")
     else:
-      # print("create new file...")
-      try:
-        # print("close existing file...")
-        self.logfile_data.close()
-      except FileNotFoundError:
-        print("Data logfile not accessible")
-      setLogfiles()
+      print("call set new logfiles 1")
+      self.setLogfiles("data")
       self.logfile_data.write(msg + "\n")
       
     self.logfile_data.flush()
@@ -141,11 +130,8 @@ class Inverter:
     if actualFilename == self.logfile_error_name:
       self.logfile_error.write(msg + "\n")
     else:
-      try:
-        self.logfile_error.close()
-      except FileNotFoundError:
-        print("Error logfile not accessible")
-      setLogfiles()
+      print("call set new logfiles 2")
+      self.setLogfiles("error")
       self.logfile_error.write(msg + "\n")
 
     self.logfile_error.flush()
@@ -165,25 +151,43 @@ class Inverter:
     else:
       return "Something went wrong"
 
-  def setLogfiles(self):
-    actualFilename = self.composeActualFilename("data")
-    try:
-      f = open(actualFilename, "a+") # if file exists, append data, if not create a new one
-      self.logfile_data = f
-      self.logfile_data_name = actualFilename
-    except FileNotFoundError:
-      print("Data logfile not accessible")
+  def setLogfiles(self, type):
+    if type == "data":
+      # close existing data log file
+      if(hasattr(self.logfile_data, 'read')):
+        try:
+          print("close existing data logfile...")
+          self.logfile_data.close()
+        except FileNotFoundError:
+          print("Data logfile not accessible")
 
-    actualFilename = self.composeActualFilename("error")
-    try:
-      f = open(actualFilename, "a+") # if file exists, append data, if not create a new one
-      self.logfile_error = f
-      self.logfile_error_name = actualFilename
-    except FileNotFoundError:
-      print("Error logfile not accessible")
+      print("setup new data logfile")
+      actualFilename = self.composeActualFilename("data")
+      try:
+        self.logfile_data = open(actualFilename, "a+") # if file exists, append data, if not create a new one
+        self.logfile_data_name = actualFilename
+        self.logfile_data.write("Data logfile (re-)opened...\n")
+      except FileNotFoundError:
+        print("Data logfile not accessible")
+    elif type == "error":
+      # close existing error log file
+      if(hasattr(self.logfile_error, 'read')):
+        try:
+          print("close existing error logfile...")
+          self.logfile_error.close()
+        except FileNotFoundError:
+          print("Error logfile not accessible")
 
-
-lsInverters = []
+      print("setup new error logfile")
+      actualFilename = self.composeActualFilename("error")
+      try:
+        self.logfile_error = open(actualFilename, "a+") # if file exists, append data, if not create a new one
+        self.logfile_error_name = actualFilename
+        self.logfile_error.write("Error logfile (re-)opened...\n")
+      except FileNotFoundError:
+        print("Error logfile not accessible")
+    else:
+      return "Something went wrong (setLogfiles)"
 
 
 def byteorder():
@@ -317,132 +321,132 @@ def decodedata(rcv):#Daten decodieren
 
   index = '" l="'
   if rcv.find(index) >= 0:
-    dataset['loggerinterval'] = str((rcv[rcv.find(index)+5:rcv.find('"',rcv.find(index)+5)]))
+    dataset['loggerinterval'] = float(str((rcv[rcv.find(index)+5:rcv.find('"',rcv.find(index)+5)])))
   else:
     dataset['loggerinterval'] = 0
 
   index = 'i="1"'
   if rcv.find(index) >= 0:
     acleistung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    operationaldata['AC_power'] = acleistung
+    operationaldata['AC_power'] = float(acleistung)
   else:
     operationaldata['AC_power'] = 0
 
   index = 'i="2"'
   if rcv.find(index) >= 0:
     acspannung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    operationaldata['AC_voltage'] = acspannung
+    operationaldata['AC_voltage'] = float(acspannung)
   else:
     operationaldata['AC_voltage'] = 0
 
   index = 'i="3"'
   if rcv.find(index) >= 0:
     acstrom = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    operationaldata['AC_current'] = acstrom
+    operationaldata['AC_current'] = float(acstrom)
   else:
     operationaldata['AC_current'] = 0
 
   index = 'i="4"'
   if rcv.find(index) >= 0:
     acfrequenz = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    operationaldata['frequency'] = acfrequenz
+    operationaldata['frequency'] = float(acfrequenz)
   else:
     operationaldata['frequency'] = 0
 
   index = 'i="5"'
   if rcv.find(index) >= 0:
     dcleistung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    operationaldata['DC_power'] = dcleistung
+    operationaldata['DC_power'] = float(dcleistung)
   else:
     operationaldata['DC_power'] = 0
 
   index = 'i="6"'
   if rcv.find(index) >= 0:
     dcspannung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    operationaldata['DC_voltage'] = dcspannung
+    operationaldata['DC_voltage'] = float(dcspannung)
   else:
     operationaldata['DC_voltage'] = 0
 
   index = 'i="7"'
   if rcv.find(index) >= 0:
     dcstrom = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    operationaldata['DC_current'] = dcstrom
+    operationaldata['DC_current'] = float(dcstrom)
   else:
     operationaldata['DC_current'] = 0
 
   index = 'i="8"'
   if rcv.find(index) >= 0:
     temp1 = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    operationaldata['temperature_left'] = temp1
+    operationaldata['temperature_left'] = float(temp1)
   else:
     operationaldata['temperature_left'] = 0
 
   index = 'i="9"'
   if rcv.find(index) >= 0:
     temp2 = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    operationaldata['temperature_right'] = temp2
+    operationaldata['temperature_right'] = float(temp2)
   else:
     operationaldata['temperature_right'] = 0
 
   index = 'i="A"'
   if rcv.find(index) >= 0:
     einstrahlung = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])) + ''
-    operationaldata['irridation'] = einstrahlung
+    operationaldata['irridation'] = float(einstrahlung)
   else:
     operationaldata['irridation'] = 0
 
   index = 'i="B"'
   if rcv.find(index) >= 0:
     modultemp = str(converthex2float(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])) + ''
-    operationaldata['temperature_pvpanel'] = modultemp
+    operationaldata['temperature_pvpanel'] = float(modultemp)
   else:
     operationaldata['temperature_pvpanel'] = 0
 
   index = 'i="C"'
   if rcv.find(index) >= 0:
     tagesertrag = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    operationaldata['daily_yield'] = tagesertrag
+    operationaldata['daily_yield'] = float(tagesertrag)
   else:
     operationaldata['daily_yield'] = 0
 
   index = 'i="D"'
   if rcv.find(index) >= 0:
     status = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))]))
-    operationaldata['status'] = status
+    operationaldata['status'] = int(float(status))
   else:
     operationaldata['status'] = 0
 
   index = 'i="E"'
   if rcv.find(index) >= 0:
     gesamtertrag = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    operationaldata['yield'] = gesamtertrag
+    operationaldata['yield'] = float(gesamtertrag)
   else:
     operationaldata['yield'] = 0
 
   index = 'i="F"'
   if rcv.find(index) >= 0:
     betriebsstunden = str(converthex2int(rcv[rcv.find(index)+6:rcv.find('<',rcv.find(index))])/10)
-    operationaldata['operating_hours'] = betriebsstunden
+    operationaldata['operating_hours'] = float(betriebsstunden)
   else:
     operationaldata['operating_hours'] = 0
 
   index = 'i="10"'
   if rcv.find(index) >= 0:
-    operationaldata['undefined1'] = str(converthex2int(rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index))])/10)
+    operationaldata['undefined1'] = float(str(converthex2int(rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index))])/10))
   else:
     operationaldata['undefined1'] = 0
 
   index = 'i="12"'
   if rcv.find(index) >= 0:
     leistungsbesch = str(converthex2int(rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index))])/10)
-    operationaldata['undefined2'] = leistungsbesch
+    operationaldata['undefined2'] = float(leistungsbesch)
   else:
     operationaldata['undefined2'] = 0
 
   index = 'i="11"'
   if rcv.find(index) >= 0:
     tagessonnenenergie = str(converthex2int(rcv[rcv.find(index)+7:rcv.find('<',rcv.find(index))])/10)
-    operationaldata['undefined3'] = tagessonnenenergie
+    operationaldata['undefined3'] = float(tagessonnenenergie)
   else:
     operationaldata['undefined3'] = 0
 
@@ -626,12 +630,6 @@ def main():
     ret = mqttclient.publish("seimerich/pv/neuerstall/status", "Warte auf Daten...");
     print("Return of mqtt publish: " + str(ret) + "\r\n")
 
-    for _inverter in lsInverters:
-      try:
-        _inverter.logfile_error.flush()
-      except FileNotFoundError:
-        print("Flush went wrong. Logfile not accessible.")
-
     print('Listen for Data')
     logstring += "Listen for Data"
     rcvdatenstring = ''
@@ -702,14 +700,19 @@ def main():
 
         el = [x for x in lsInverters if x.serialno == jsondata['serialno']] 
         if len(el) > 0:
-          print("Inverter already in list")
+          print("Inverter already in list 1")
           inverter = el[0]
         else:
-          print("Adding new inverter to list")
+          print("Adding new inverter to list 1")
           inverter = Inverter(jsondata['serialno'])
           lsInverters.append(inverter)
 
         inverter.logDataMSG(json.dumps(jsondata, sort_keys=True))
+
+        try:
+          inverter.logfile_data.flush()
+        except FileNotFoundError:
+          print("Flush went wrong. Logfile not accessible.")
 
       elif rcvdatenstring.find('<re') >= 0: # Fehlermeldung empfangen
         print('Empfangene Nachricht enthält Fehlermeldung des Wechselrichters <re>\r\n')
@@ -721,14 +724,19 @@ def main():
 
         el = [x for x in lsInverters if x.serialno == jsondata['serialno']] 
         if len(el) > 0:
-          print("Inverter already in list")
+          print("Inverter already in list 2")
           inverter = el[0]
         else:
-          print("Adding new inverter to list")
+          print("Adding new inverter to list 2")
           inverter = Inverter(jsondata['serialno'])
           lsInverters.append(inverter)
 
         inverter.logErrorMSG(json.dumps(jsondata, sort_keys=True))
+
+        try:
+          inverter.logfile_error.flush()
+        except FileNotFoundError:
+          print("Flush went wrong. Logfile not accessible.")
 
       elif rcvdatenstring.find('<crq') >= 0: # Steuerungsdaten empfangen # Wenn Steuerdaten empfangen, dann in Uhrzeit setzen
         # Dem WR aktuelle Uhrzeit schicken schicken
