@@ -12,11 +12,15 @@ import logging
 from datetime import datetime
 from collections import OrderedDict
 
-logging.basicConfig(filename='logfile.log', encoding='utf-8', level=logging.DEBUG)
+logging.basicConfig(handlers=[logging.FileHandler(filename="./logfile.log", encoding='utf-8', mode='a+')], format="%(asctime)s %(name)s: %(levelname)s: %(message)s", datefmt="%F %A %T", level=logging.DEBUG)  # logging.INFO
+#logging.basicConfig(filename="logfile.log", level=logging.DEBUG)
+
+# logger = logging.getLogger()
 
 minpythonversion = 0x3020000
 if sys.hexversion < minpythonversion:
-  print('Python version ' + str(sys.version) + ' is too old, please use Python version 3.2 or newer!')
+  # print('Python version ' + str(sys.version) + ' is too old, please use Python version 3.2 or newer!')
+  logging.debug('Python version ' + str(sys.version) + ' is too old, please use Python version 3.2 or newer!')
   sys.exit()
 
 # Version 4:
@@ -59,19 +63,6 @@ if sys.hexversion < minpythonversion:
 # sudo crontab -e
 # @reboot sudo python3 /home/pi/RcvSendSinvertDaten_V4.py
 
-
-datalogpath = "./" # /home/pi/
-errlogpath = "./" # /home/pi/
-loggingpath = "./" # /home/pi/
-datalogfilename = 'DataSinvert.csv'
-errlogfilename = 'ErrSinvert.csv'
-loggingfilename = 'LoggingSinvert.txt'
-
-#Logfilepfad initialisieren
-datalogfile = datalogpath + time.strftime("%Y_%m_") + datalogfilename
-errlogfile = errlogpath + time.strftime("%Y_%m_") + errlogfilename
-loggingfile = loggingpath + time.strftime("%Y_%m_") + loggingfilename
-
 #Zeichenfolgen für Daten sind bei den verschiedenen Firmwareständen unterschiedlich:
 #je nach Firmware mit "#" auskommentieren bzw. einkommentieren
 
@@ -90,9 +81,6 @@ server_port = 81 #Port auf dem das prg am raspi lauscht
 # Hier: 5.45.98.160 -> greensynergy server
 rawdataserver = [('5.45.98.160', 80)]
 
-#init logstring
-logstring = ''
-
 lsInverters = []
 
 class Inverter:
@@ -106,37 +94,40 @@ class Inverter:
     self.setLogfiles("error")
 
   def logDataMSG(self, msg):
-    print("Trying to log data... ")
+    #print("Trying to log data... ")
+    logging.debug("Trying to log data... ")
 
     actualFilename = self.composeActualFilename("data")
-    # print("actualFilename: ", actualFilename)
+    logging.debug("actualFilename: " + str(actualFilename))
 
     if actualFilename == self.logfile_data_name:
-      # print("Actual filename ok...")
+      logging.debug("Actual filename ok...")
       self.logfile_data.write(msg + "\n")
     else:
-      print("call set new logfiles 1")
+      logging.info("Create new data logfile.")
+      logging.info("actualFilename: " + str(actualFilename))
       self.setLogfiles("data")
       self.logfile_data.write(msg + "\n")
       
     self.logfile_data.flush()
 
-    print("Logged in data logfile.")
+    logging.debug("Logged in data logfile.")
 
   def logErrorMSG(self, msg):
-    print("Trying to log error... ")
+    logging.debug("Trying to log error... ")
 
     actualFilename = self.composeActualFilename("error")
     if actualFilename == self.logfile_error_name:
       self.logfile_error.write(msg + "\n")
     else:
-      print("call set new logfiles 2")
+      logging.info("Create new error logfile.")
+      logging.info("actualFilename: " + str(actualFilename))
       self.setLogfiles("error")
       self.logfile_error.write(msg + "\n")
 
     self.logfile_error.flush()
 
-    print("Logged in error logfile.")
+    logging.debug("Logged in error logfile.")
 
   # Compose the filename as it should be for the inverter and the current month and year
   def composeActualFilename(self, type):
@@ -156,67 +147,64 @@ class Inverter:
       # close existing data log file
       if(hasattr(self.logfile_data, 'read')):
         try:
-          print("close existing data logfile...")
+          logging.info("close existing data logfile...")
           self.logfile_data.close()
         except FileNotFoundError:
-          print("Data logfile not accessible")
+          logging.error("Data logfile not accessible")
 
-      print("setup new data logfile")
+      logging.debug("setup new data logfile")
       actualFilename = self.composeActualFilename("data")
       try:
         self.logfile_data = open(actualFilename, "a+") # if file exists, append data, if not create a new one
         self.logfile_data_name = actualFilename
         self.logfile_data.write("Data logfile (re-)opened...\n")
       except FileNotFoundError:
-        print("Data logfile not accessible")
+        logging.error("Data logfile not accessible")
     elif type == "error":
       # close existing error log file
       if(hasattr(self.logfile_error, 'read')):
         try:
-          print("close existing error logfile...")
+          logging.info("close existing error logfile...")
           self.logfile_error.close()
         except FileNotFoundError:
-          print("Error logfile not accessible")
+          logging.error("Error logfile not accessible")
 
-      print("setup new error logfile")
+      logging.debug("setup new error logfile")
       actualFilename = self.composeActualFilename("error")
       try:
         self.logfile_error = open(actualFilename, "a+") # if file exists, append data, if not create a new one
         self.logfile_error_name = actualFilename
         self.logfile_error.write("Error logfile (re-)opened...\n")
       except FileNotFoundError:
-        print("Error logfile not accessible")
+        logging.error("Error logfile not accessible")
     else:
+      logging.debug("Something went wrong (setLogfiles)")
       return "Something went wrong (setLogfiles)"
 
 
 def byteorder():
-  global logstring
   return sys.byteorder
 
 def standard_encoding():
   return sys.getdefaultencoding()
 
 def standardausgabe_encoding():
-  global logstring
   return sys.stdout.encoding
 
 def string2bytes(text):
-  global logstring
   return bytes(text, "cp1252")
 
 def bytes2string(bytes):
-  global logstring
   return str(bytes, "cp1252")
 
 def converthex2float(hexval):
-  global logstring
   #print(hexval)
   try:
     return round(struct.unpack('>f', struct.pack('>I', int(float.fromhex(hexval))))[0],2)
   except BaseException as e:
-    print(str(e) + '\r\n')
-    logstring += str(e) + '\r\n' + 'Error while convert hex to float failed! hexvalue = ' + str(hexval) + '\r\n'
+    #print(str(e) + '\r\n')
+    #logstring += str(e) + '\r\n' + 'Error while convert hex to float failed! hexvalue = ' + str(hexval) + '\r\n'
+    logging.error(str(e) + '\r\n' + 'Error while convert hex to float failed! hexvalue = ' + str(hexval))
     return 0
 
 def converthex2int(hexval):
@@ -225,74 +213,12 @@ def converthex2int(hexval):
   try:
     return struct.unpack('>i', struct.pack('>I', int(float.fromhex(hexval))))[0]
   except BaseException as e:
-    print(str(e) + '\r\n')
-    logstring += str(e) + '\r\n' + 'Error while convert hex to int failed! hexvalue = ' + str(hexval) + '\r\n'
+    #print(str(e) + '\r\n')
+    #logstring += str(e) + '\r\n' + 'Error while convert hex to int failed! hexvalue = ' + str(hexval) + '\r\n'
+    logging.error(str(e) + '\r\n' + 'Error while convert hex to int failed! hexvalue = ' + str(hexval))
     return 0
 
-def initdatalogfile(datalogfile):
-  global logstring
-  string = []
-
-  string.append('MAC-Adresse')
-  string.append('Seriennummer')
-  string.append('Zeitstempel')
-  string.append('Loggerinterval')
-  string.append('AC Momentanleistung [W]')
-  string.append('AC Netzspannung [V]')
-  string.append('AC Strom [A]')
-  string.append('AC Frequenz [Hz]')
-  string.append('DC Momentanleistung [W]')
-  string.append('DC-Spannung [V]')
-  string.append('DC-Strom [A]')
-  string.append('Temperatur 1 Kuehlkoerper rechts [°C]')
-  string.append('Temperatur 2 innen oben links [°C]')
-  string.append('Sensor 1 Messwert, Einstrahlung [W/m^2]')
-  string.append('Sensor 2 Messwert, Modultemperatur [°C]')
-  string.append('Tagesertrag [kwh]')
-  string.append('Status')
-  string.append('Gesamtertrag [kwh]')
-  string.append('Betriebsstunden [h]')
-  string.append('scheinbar nur ältere FW?')
-  string.append('"neuere" FW: 100.0% Leistungsbeschräkung [%]')
-  string.append('"neuere" FW, vielleicht: 0.0 kWh Tagessonnenenergie')
-  returnval = (str(string).replace("', '",';').replace("['",'').replace("']",'\r\n'))
-  f = open(datalogfile, 'a')
-  f.write(returnval)
-  f.close()
-
-def initerrlogfile(errlogfile):
-  global logstring
-  string = []
-
-  string.append('MAC-Adresse')
-  string.append('Seriennummer')
-  string.append('Zeitstempel')
-  string.append('Errorcode')
-  string.append('State')
-  string.append('Short')
-  string.append('Long')
-  string.append('Type')
-  string.append('Actstate')
-  returnval = (str(string).replace("', '",';').replace("['",'').replace("']",'\r\n'))
-  f = open(errlogfile, 'a')
-  f.write(returnval)
-  f.close()
-
-# def writeDataFile(data):
-#   serialno = data['serialno']
-
-#   for i, inverter in enumerate(lsLogFiles):
-#     if serialno in inverter:
-#       # check if file exits -> write to file
-#     else
-
-#   print("write data file")
-
-# def writeErrorFile(path):
-#   print("write error file")
-
 def decodedata(rcv):#Daten decodieren
-  global logstring
   dataset = {}
   operationaldata = {}
 
@@ -450,18 +376,15 @@ def decodedata(rcv):#Daten decodieren
   else:
     operationaldata['undefined3'] = 0
 
-  # returnval = (str(string).replace("', '",';').replace("['",'').replace("']",'\r\n').replace(".",','))
-  # logstring += 'Decoded data:' + '\r\n' + returnval + '\r\n'
-  # print(returnval)
   dataset['operationaldata'] = operationaldata
-  print("JSON: " + json.dumps(dataset, sort_keys=True)) # sort_keys=True
+  logging.debug("JSON: " + json.dumps(dataset, sort_keys=True))
+  # print("JSON: " + json.dumps(dataset, sort_keys=True)) # sort_keys=True
   return dataset
 
 def decodeerr(rcv):#Störungen decodieren
 
   #xmlData=<re><m>502DF40048AF</m><s>LBAN02261010321</s><e><ts>1612105645</ts><code>a010c</code><state>2</state><short>0</short><long>2048</long><type>8</type><actstate>6</actstate></e></re>
 
-  global logstring
   string = []
   errormsg = {}
 
@@ -523,19 +446,17 @@ def decodeerr(rcv):#Störungen decodieren
     errormsg['actstate'] = str((rcv[rcv.find(index)+10:rcv.find('<',rcv.find(index)+10)]))
   else:
     errormsg['actstate'] = "0"
-  # returnval = (str(string).replace("', '",';').replace("['",'').replace("']",'\r\n').replace(".",','))
-  # print(returnval)
-  # logstring += 'Decoded errors:' + '\r\n' + returnval + '\r\n'
-  print("JSON Error: " + json.dumps(errormsg, sort_keys=True)) # sort_keys=True
+
+  # print("JSON Error: " + json.dumps(errormsg, sort_keys=True)) # sort_keys=True
+  logging.debug("JSON Error: " + json.dumps(errormsg, sort_keys=True)) # sort_keys=True
   return errormsg
 
 def sendbytes2portal(server_addr,block):
-    global logstring
     #Sende zu Sitelink/Refu-Log Portal
 
     daten = 0
 
-    print(server_addr)
+    logging.debug("Server address: " + str(server_addr))
     try:
       client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
       client_socket.settimeout(5)
@@ -549,8 +470,9 @@ def sendbytes2portal(server_addr,block):
       # print('Empfange Daten von ' + str(server_addr) + ':\r\n' + str(datenstring) + '\r\n')
       # logstring += 'Empfange Daten von ' + str(server_addr) + ':\r\n' + str(datenstring) + '\r\n'
     except BaseException as e:
-      print(str(e) + '\r\n')
-      logstring += str(e) + '\r\n' + 'Sending data to ' + str(server_addr) + ' failed!' + '\r\n'
+      #print(str(e) + '\r\n')
+      #logstring += str(e) + '\r\n' + 'Sending data to ' + str(server_addr) + ' failed!' + '\r\n'
+      logging.error(str(e) + '\r\n' + 'Sending data to ' + str(server_addr) + ' failed!')
 
     client_socket.close()
     del client_socket
@@ -590,12 +512,13 @@ def gettimemsg():
     +'\r\n'
     + sendcontent)
   except BaseException as e:
-    print('Irgendwas bei der Erstellung der Antwortnachricht zum Setzen der Uhrzeit ist schief gelaufen. gettimemsg()')
+    #print('Irgendwas bei der Erstellung der Antwortnachricht zum Setzen der Uhrzeit ist schief gelaufen. gettimemsg()')
+    logging.error("Irgendwas bei der Erstellung der Antwortnachricht zum Setzen der Uhrzeit ist schief gelaufen. gettimemsg()")
     return getokmsg() # Wenn Zeit holen nicht möglich, nur Ok message schicken
 
 def on_connect(client, userdata, flags, rc):
-  print("MQTT client connected: " + str(client.is_connected()))
-  print("Connected with result code "+str(rc))
+  logging.info("MQTT client connected: " + str(client.is_connected()))
+  logging.info("Connected with result code: " + str(rc))
 
   # Subscribing in on_connect() means that if we lose the connection and
   # reconnect then subscriptions will be renewed.
@@ -603,7 +526,6 @@ def on_connect(client, userdata, flags, rc):
 
 #Hier startet Main prg
 def main():
-  global logstring
   global rawdataserver
   global server_socket
 
@@ -613,9 +535,6 @@ def main():
   server_socket.bind((server_ip, server_port)) # Keine IP angeben ==> Server lauscht auf allen zugewiesenen IP Adressen
   server_socket.listen(5) # Socket beobachten
 
-  loggingfile = loggingpath + time.strftime("%Y_%m_") + loggingfilename
-  logstring = ""
-
   # Init MQTT client
   mqttclient = mqtt.Client()
   mqttclient.on_connect = on_connect
@@ -624,14 +543,12 @@ def main():
   mqttclient.connect("51.15.196.38", 1883)
   mqttclient.loop_start()
 
-
   #print(socket.gethostbyname(socket.gethostname()))
   while True:
     ret = mqttclient.publish("seimerich/pv/neuerstall/status", "Warte auf Daten...");
-    print("Return of mqtt publish: " + str(ret) + "\r\n")
+    logging.debug("Return of mqtt publish: " + str(ret) + "\r\n")
 
-    print('Listen for Data')
-    logstring += "Listen for Data"
+    logging.debug('Listen for Data')
     rcvdatenstring = ''
     rcvok1 = ''
     rcvok2 = ''
@@ -641,19 +558,16 @@ def main():
     client_serving_socket.settimeout(1)
 
     for ls in lsInverters:
-      print(ls.serialno)
+      logging.debug(ls.serialno)
   
     while True:
       try:
         rcvbytes = string2bytes('') # clear buffer for reading
         rcvbytes = client_serving_socket.recv(1024) #Daten empfangen
-        print("Length rcvbytes: " + str(len(rcvbytes)))
-        logstring += "Length rcvbytes: " + str(len(rcvbytes)) + "\r\n"
-        # print(bytes2string(rcvbytes) + '\r\n')
+        logging.debug("Length rcvbytes: " + str(len(rcvbytes)))
       except BaseException as e:
         #print(str(e) + '\r\n')
-        print(str(e) + '\r\n' + 'Error während lesen von Socket!' + '\r\n' + str(rcvbytes) + '\r\n')
-        logstring += str(e) + '\r\n' + 'Error während lesen von Socket!' + '\r\n' + str(rcvbytes) + '\r\n'
+        logging.debug(str(e) + '\r\n' + 'Error während lesen von Socket!' + '\r\n' + str(rcvbytes) + '\r\n')
       block = block + rcvbytes # compose message from several readings
 
       rcvdatenstring = bytes2string(block) # convert received composed message to a string
@@ -671,39 +585,35 @@ def main():
 
       rcvok1 = rcvdatenstring.find('sinvertwebmonitor') # check if message contains "sinvertwebmonitor"
       rcvok2 = rcvdatenstring.find('xmlData') # check of message contains "xmlData"
-      print("rcvok1: " + str(rcvok1) + " rcvok2: " + str(rcvok2))
-      logstring += "rcvok1: " + str(rcvok1) + " rcvok2: " + str(rcvok2) + "\r\n"
+      logging.debug("rcvok1: " + str(rcvok1) + " rcvok2: " + str(rcvok2))
       if ((rcvok1 >= 0 and rcvok2 >= 0) or len(rcvbytes) <= 0): # falls Nachricht vollständig gelesen (rcvok1/2 = 0k) oder keine Daten mehr gelesen werden -> break
         break
 
     # Falls rcvok1 und rcvok2 dann gehen wir davon aus, dass Daten vom Wechselrichter kommen.
     if (rcvok1 >= 0 and rcvok2 >= 0):
-      print("Daten von WR empfangen: \r\n" + rcvdatenstring + '\r\n')
-      logstring += "Daten von WR empfangen: " + rcvdatenstring + '\r\n'
+      logging.debug("Daten von WR empfangen: \r\n" + rcvdatenstring + '\r\n')
 
       # Daten an GreenSynergy Portal senden
-      print("Daten an GreenSynergy Portal senden. \r\n")
-      logstring += "Daten an GreenSynergy Portal senden. \r\n"
+      logging.debug("Daten an GreenSynergy Portal senden. \r\n")
       for adress in rawdataserver:
         reply = sendbytes2portal(adress, block)
-      print("Daten von GreenSynergy Portal enthalten: \r\n" + bytes2string(reply) + "\r\n")
-      logstring += "Daten von GreenSynergy Portal enthalten: \r\n" + bytes2string(reply) + "\r\n"
+      logging.debug("Daten von GreenSynergy Portal enthalten: \r\n" + bytes2string(reply) + "\r\n")
 
       # Empfangene Daten verarbeiten
       if rcvdatenstring.find('<rd') >= 0: # Daten empfangen
-        print('Empfangene Nachricht enthält Betriebsdaten des Wechselrichters <rd>\r\n')
+        logging.debug('Empfangene Nachricht enthält Betriebsdaten des Wechselrichters <rd>\r\n')
         # print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
         client_serving_socket.send(string2bytes(getokmsg()))
         jsondata = decodedata(rcvdatenstring)
         ret = mqttclient.publish("seimerich/pv/neuerstall/" + str(jsondata['serialno']) + "/data", json.dumps(jsondata, sort_keys=True));
-        print("Return of mqtt publish: " + str(ret) + "\r\n")
+        logging.debug("Return of mqtt publish: " + str(ret) + "\r\n")
 
         el = [x for x in lsInverters if x.serialno == jsondata['serialno']] 
         if len(el) > 0:
-          print("Inverter already in list 1")
+          logging.debug("Inverter already in list 1")
           inverter = el[0]
         else:
-          print("Adding new inverter to list 1")
+          logging.info("Adding new inverter to list: " + str(jsondata['serialno']))
           inverter = Inverter(jsondata['serialno'])
           lsInverters.append(inverter)
 
@@ -712,22 +622,22 @@ def main():
         try:
           inverter.logfile_data.flush()
         except FileNotFoundError:
-          print("Flush went wrong. Logfile not accessible.")
+          logging.error("Flush went wrong. Logfile not accessible.")
 
       elif rcvdatenstring.find('<re') >= 0: # Fehlermeldung empfangen
-        print('Empfangene Nachricht enthält Fehlermeldung des Wechselrichters <re>\r\n')
+        logging.debug('Empfangene Nachricht enthält Fehlermeldung des Wechselrichters <re>\r\n')
         # print('Daten, die wir an WR senden würden: \r\n' + getokmsg() + "\r\n")
         client_serving_socket.send(string2bytes(getokmsg()))
         jsondata = decodeerr(rcvdatenstring)
         ret = mqttclient.publish("seimerich/pv/neuerstall/" + str(jsondata['serialno']) + "/error", json.dumps(jsondata, sort_keys=True));
-        print("Return of mqtt publish: " + str(ret) + "\r\n")
+        logging.debug("Return of mqtt publish: " + str(ret) + "\r\n")
 
         el = [x for x in lsInverters if x.serialno == jsondata['serialno']] 
         if len(el) > 0:
-          print("Inverter already in list 2")
+          logging.debug("Inverter already in list 2")
           inverter = el[0]
         else:
-          print("Adding new inverter to list 2")
+          logging.info("Adding new inverter to list: " + str(jsondata['serialno']))
           inverter = Inverter(jsondata['serialno'])
           lsInverters.append(inverter)
 
@@ -736,49 +646,38 @@ def main():
         try:
           inverter.logfile_error.flush()
         except FileNotFoundError:
-          print("Flush went wrong. Logfile not accessible.")
+          logging.error("Flush went wrong. Logfile not accessible.")
 
       elif rcvdatenstring.find('<crq') >= 0: # Steuerungsdaten empfangen # Wenn Steuerdaten empfangen, dann in Uhrzeit setzen
         # Dem WR aktuelle Uhrzeit schicken schicken
-        print('Empfangene Nachricht enthält Steuerungsanfrage des Wechselrichters <crq>\r\n')
+        logging.debug('Empfangene Nachricht enthält Steuerungsanfrage des Wechselrichters <crq>\r\n')
         # print('Daten, die wir an WR senden würden: \r\n' + gettimemsg() + "\r\n")
         client_serving_socket.send(string2bytes(gettimemsg()))
 
       else: # Serveranfragen, die vom Wechselrichter kommen, aber nicht interpretiert werden kann
-        print('Falsches Datenformat empfangen!\r\n')
-        print(rcvdatenstring)
-        # logstring += 'Falsches Datenformat empfangen!\r\n' + rcvdatenstring[rcvdatenstring.find('xmlData'):] + '\r\n'
+        logging.debug('Falsches Datenformat empfangen!\r\n')
+        logging.debug(rcvdatenstring)
         # Dem WR eine OK Nachricht schicken
         client_serving_socket.send(string2bytes(getokmsg()))
         ret = mqttclient.publish("seimerich/pv/neuerstall/Unbekannte_Wechselrichterdaten", str(rcvdatenstring));
-        print("Return of mqtt publish: " + str(ret) + "\r\n")
+        logging.debug("Return of mqtt publish: " + str(ret) + "\r\n")
 
     else: # Serveranfragen, die nicht von den Wechselrichtern stammen
-      print("Andere Daten empfangen: " + rcvdatenstring + '\r\n')
-      logstring += "Andere Daten empfangen: " + rcvdatenstring + '\r\n'
-      ret = mqttclient.publish("seimerich/pv/neuerstall/Unbekannte_Daten", str(rcvdatenstring));
-      print("Return of mqtt publish: " + str(ret) + "\r\n")
+      logging.debug("Andere Daten empfangen: " + rcvdatenstring + '\r\n')
+      #ret = mqttclient.publish("seimerich/pv/neuerstall/Unbekannte_Daten", str(rcvdatenstring));
+      #logging.debug("Return of mqtt publish: " + str(ret) + "\r\n")
 
     # Verbindung schließen
     client_serving_socket.close()
     del client_serving_socket
 
-    #Daten in Loggingfile schreiben
-    f = open(loggingfile, 'a')
-    f.write(logstring)
-    f.close()
-    logstring = ''
-
 #Hauptschleife
 while True:
   try:
+    logging.debug("Start of program")
     main()
   except BaseException as e:#bei einer Exception Verbindung schließen und neu starten
-    print(str(e) + '\r\n')
-    f = open(loggingfile, 'a')
-    f.write(logstring)
-    f.close()
-    logstring = ''
+    logging.error(str(e) + '\r\n')
     server_socket.close()
     del server_socket
   time.sleep(10)#10s warten
